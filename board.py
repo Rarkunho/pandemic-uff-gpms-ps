@@ -4,6 +4,7 @@ import math
 from typing import List, Tuple
 from city import City
 from game import Game
+import platform
 import ctypes
 
 # Initialize Pygame

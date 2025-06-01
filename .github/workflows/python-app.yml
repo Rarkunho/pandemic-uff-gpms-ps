@@ -25,4 +25,4 @@ jobs:
         pip install pygame
     - name: Test main game
       run: |
-        game.py
+        python3 game.py

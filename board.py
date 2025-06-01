@@ -4,15 +4,22 @@ import math
 from typing import List, Tuple
 from city import City
 from game import Game
+import platform
 import ctypes
 
 # Initialize Pygame
 pygame.init()
 
 # Screen dimensions
-user32 = ctypes.windll.user32
-WIDTH = user32.GetSystemMetrics(0)
-HEIGHT = user32.GetSystemMetrics(1)
+if platform.system() == "Windows":
+    user32 = ctypes.windll.user32
+    WIDTH = user32.GetSystemMetrics(0)
+    HEIGHT = user32.GetSystemMetrics(1)
+else:
+    display_info = pygame.display.Info()
+    WIDTH = display_info.current_w
+    HEIGHT = display_info.current_h
+
 screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
 pygame.display.set_caption("Pandemic Board Game")
 

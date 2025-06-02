@@ -26,3 +26,4 @@ jobs:
     - name: Test main game
       run: |
         python main.py
+      timeout-minutes: 0.1

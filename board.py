@@ -25,10 +25,10 @@ pygame.display.set_caption("Pandemic Board Game")
 
 # Colors
 WHITE = (255, 255, 255)
-BLACK = (0, 0, 0)
-BLUE = (0, 100, 255)
-YELLOW = (255, 255, 0)
-RED = (255, 0, 0)
+PURPLE = (170, 80, 255)
+BLUE = (80, 200, 255) 
+YELLOW = (255, 220, 90)
+PINK = (255, 80, 180)
 GRAY = (200, 200, 200)
 
 class Board:
@@ -47,30 +47,225 @@ class Board:
         ]
         self.move_mode = False  # True when waiting for player to pick a neighbor city to move
         self.highlighted_cities = []  # Cities currently highlighted for movement
+        
+        # UI Settings
+        self.card_width = 30
+        self.card_height = 40
+        self.card_margin = 3
+        self.disease_colors = {
+            'Blue': BLUE,
+            'Yellow': YELLOW,
+            'Pink': PINK,
+            'Purple': PURPLE
+        }
+        
+        # Message display
+        self.message_history = []
+        self.message_timer = 0
+        self.message_duration = 180  # frames (3 seconds at 60 FPS)
+        self.max_messages = 3  # Maximum number of messages to keep in history
+        
+    def show_message(self, message: str):
+        """Display a message on the screen for a short duration.
+        
+        Args:
+            message: The message to display. Will be added to the message history.
+        """
+        # Add new message to history
+        self.message_history.insert(0, message)
+        # Keep only the most recent messages
+        self.message_history = self.message_history[:self.max_messages]
+        # Reset timer for all messages
+        self.message_timer = self.message_duration
+        
+    def show_blocking_message(self, message: str):
+        """Display a prominent, centered message that blocks the UI until the user closes it.
+        
+        Args:
+            message: The message to display (can be multiple lines separated by '\n')
+        """
+        # Create a semi-transparent overlay
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180))  # Semi-transparent black
+        
+        # Set up fonts
+        title_font = pygame.font.SysFont('Arial', 36, bold=True)
+        text_font = pygame.font.SysFont('Arial', 24)
+        
+        # Calculate message box dimensions
+        lines = message.split('\n')
+        line_heights = [title_font.size(line)[1] if i == 0 else text_font.size(line)[1] 
+                       for i, line in enumerate(lines)]
+        total_height = sum(line_heights) + 60  # Add padding
+        max_width = max(title_font.size(line)[0] if i == 0 else text_font.size(line)[0] 
+                       for i, line in enumerate(lines))
+        
+        # Draw message box
+        box_rect = pygame.Rect(
+            (WIDTH - max_width - 40) // 2,
+            (HEIGHT - total_height) // 2,
+            max_width + 40,
+            total_height + 40
+        )
+        
+        # Main game loop for the blocking message
+        waiting = True
+        while waiting:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    return
+                elif event.type == pygame.KEYDOWN or event.type == pygame.MOUSEBUTTONDOWN:
+                    waiting = False
+            
+            # Draw the current game state
+            self.draw()
+            
+            # Draw the overlay and message box
+            screen.blit(overlay, (0, 0))
+            pygame.draw.rect(screen, (50, 50, 50), box_rect)
+            pygame.draw.rect(screen, (255, 255, 255), box_rect, 2)
+            
+            # Draw each line of text
+            y_offset = box_rect.y + 20
+            for i, line in enumerate(lines):
+                if i == 0:  # First line is the title
+                    text_surface = title_font.render(line, True, (255, 255, 255))
+                else:
+                    text_surface = text_font.render(line, True, (255, 255, 255))
+                text_rect = text_surface.get_rect(centerx=box_rect.centerx, y=y_offset)
+                screen.blit(text_surface, text_rect)
+                y_offset += line_heights[i] + 10
+                
+            # Draw instruction to continue
+            continue_text = text_font.render("Press any key or click to continue...", True, (200, 200, 200))
+            continue_rect = continue_text.get_rect(centerx=box_rect.centerx, 
+                                                 y=box_rect.bottom - 30)
+            screen.blit(continue_text, continue_rect)
+            
+            pygame.display.flip()
+            pygame.time.delay(30)  # Cap at ~33 FPS to reduce CPU usage
+    
+    def update(self):
+        """Update board state, called once per frame."""
+        # Update message timer
+        if self.message_timer > 0:
+            self.message_timer -= 1
+            if self.message_timer == 0:
+                self.message_history = []  # Clear all messages when timer expires
+    
+    def draw_disease_cubes(self):
+        """Display the current disease cube counts on the screen."""
+        # Position in top right corner
+        start_x = WIDTH - 150
+        start_y = 20
+        cube_size = 20
+        margin = 10
+        
+        # Draw title
+        title = self.font.render("Disease Cubes:", True, (255, 255, 255))
+        screen.blit(title, (start_x, start_y))
+        
+        # Draw each disease cube count
+        for i, (color_name, color) in enumerate(self.disease_colors.items()):
+            # Count cubes of this color across all cities
+            cube_count = sum(city.disease_quantity for city in self.game.cities 
+                           if hasattr(city, 'disease') and city.disease.color == color_name)
+            
+            # Draw colored rectangle for the disease
+            y_pos = start_y + 30 + i * (cube_size + margin)
+            pygame.draw.rect(screen, color, (start_x, y_pos, cube_size, cube_size))
+            pygame.draw.rect(screen, (255, 255, 255), (start_x, y_pos, cube_size, cube_size), 1)
+            
+            # Draw cube count
+            count_text = self.small_font.render(f"{color_name}: {cube_count}", True, (255, 255, 255))
+            screen.blit(count_text, (start_x + cube_size + 10, y_pos + 5))
+    
+    def draw_player_hand(self):
+        """Draw the current player's hand in the bottom right corner."""
+        player = self.game.get_current_player()
+        if not player or not hasattr(player, 'hand') or not player.hand:
+            return
+            
+        # Calculate starting position (bottom right corner)
+        start_x = WIDTH - 20
+        y = HEIGHT - 60
+        
+        # Filter out non-city cards (like Epidemic cards which are removed when drawn)
+        city_cards = [card for card in player.hand if hasattr(card, 'city')]
+        
+        # Draw hand label with actual number of city cards
+        hand_text = self.small_font.render(f"{player.name}'s Hand ({len(city_cards)}/7):", True, (255, 255, 255))
+        screen.blit(hand_text, (start_x - 100, y - 15))
+        
+        # Draw cards from right to left
+        for i, card in enumerate(reversed(city_cards)):
+            x = start_x - ((i + 1) * (self.card_width + self.card_margin))
+            
+            # Get card color from city's disease
+            color = self.disease_colors.get(card.city.disease.color, (150, 150, 150))
+            
+            # Draw card as a simple colored rectangle
+            pygame.draw.rect(screen, color, (x, y, self.card_width, self.card_height))
+            pygame.draw.rect(screen, (255, 255, 255), (x, y, self.card_width, self.card_height), 1)
+    
+    def draw_messages(self):
+        """Draw all active messages on the screen."""
+        if not self.message_history or self.message_timer <= 0:
+            return
+            
+        # Starting y-position for the first message
+        y_offset = 30
+        message_spacing = 5
+        
+        # Draw each message in history
+        for i, message in enumerate(self.message_history):
+            if i >= self.max_messages:
+                break
+                
+            # Calculate message position (centered at top of screen, stacked vertically)
+            message_surface = self.font.render(message, True, (255, 255, 255))
+            message_rect = message_surface.get_rect(center=(WIDTH // 2, y_offset + i * (message_surface.get_height() + message_spacing)))
+            
+            # Draw semi-transparent background for better readability
+            bg_rect = message_rect.inflate(20, 10)
+            s = pygame.Surface((bg_rect.width, bg_rect.height), pygame.SRCALPHA)
+            # Make older messages more transparent
+            alpha = max(100, 180 - (i * 40))  # Decrease alpha for older messages
+            s.fill((0, 0, 0, alpha))
+            screen.blit(s, bg_rect)
+            
+            # Draw message text
+            screen.blit(message_surface, message_rect)
 
 
 
     def _get_city_color(self, city):
         """Get the color based on the city's disease color"""
-        if city.disease.color == "Blue":
-            return (0, 0, 255)
-        elif city.disease.color == "Yellow":
-            return (255, 255, 0)
-        elif city.disease.color == "Red":
-            return (255, 0, 0)
-        elif city.disease.color == "Black":
-            return (0, 0, 0)
-        return GRAY
+        return self.disease_colors.get(city.disease.color, GRAY)
 
 
     def draw(self):
         """Draw the game board"""
+        # Update board state
+        self.update()
+        
         # Clear the screen
         # Retro 80s arcade style background with nebula, vignette, and starfield
         import time, math, random
         t = time.time()
         screen.fill((0, 0, 0))
+        global WIDTH, HEIGHT
         WIDTH, HEIGHT = screen.get_width(), screen.get_height()
+        
+        # Draw messages on top of everything
+        self.draw_messages()
+        
+        # Draw disease cubes counter
+        self.draw_disease_cubes()
+        
+        # Draw player hand
+        self.draw_player_hand()
 
         # --- Action Menu ---
         menu_height = 70
@@ -110,6 +305,15 @@ class Board:
             if hasattr(current_city, 'disease') and hasattr(current_city.disease, 'has_cure') and current_city.disease.has_cure:
                 cure_text = self.font.render("CURED!", True, (0, 255, 0))
                 screen.blit(cure_text, (100, y-12))
+            
+            # Display infection level and outbreaks in the left menu
+            infection_text = self.font.render(f"Infection Level: {self.game.infectionLevel}", True, (255, 100, 100))
+            screen.blit(infection_text, (20, y + 10))
+            
+            # Display outbreaks counter (turns red when >= 5)
+            outbreak_color = (255, 100, 100) if self.game.outbreaks >= 5 else (255, 255, 255)
+            outbreak_text = self.font.render(f"Outbreaks: {self.game.outbreaks}/8", True, outbreak_color)
+            screen.blit(outbreak_text, (20, y + 30))
         # --- Neon/board drawing code continues as before ---
 
         # ... (rest of your draw code) ...
@@ -128,22 +332,11 @@ class Board:
         offset_x = (WIDTH - (spread_x * zoom)) // 2 - int(min_x * zoom)
         offset_y = (HEIGHT - (spread_y * zoom)) // 2 - int(min_y * zoom)
 
-        # Draw cities, highlighting neighbors if in move mode
-        for city in self.game.cities:
-            city_x, city_y = city.coordinates
-            city_x = int(city_x * zoom + offset_x)
-            city_y = int(city_y * zoom + offset_y)
-            # If move mode and this city is a neighbor, highlight it
-            if self.move_mode and city in self.highlighted_cities:
-                pygame.draw.circle(screen, (0,255,0), (city_x, city_y), 20, 4)  # Green highlight
-            # ... (rest of city drawing as before) ...
-
-                pygame.draw.rect(screen, (255, 255, 255), rect, 4, border_radius=12)
-            text = self.font.render(label, True, (0,0,0))
-            screen.blit(text, (rect.x + (rect.width-text.get_width())//2, rect.y + (rect.height-text.get_height())//2))
-        # Show current player and actions left
+        # Removed first iteration of drawing cities
+        # Show current player info
         player = self.game.get_current_player() if self.game.players else None
         if player:
+            # Draw current player info
             player_text = self.font.render(f"Current Player: {player.name}", True, (255,255,255))
             screen.blit(player_text, (20, y-32))
         # --- Static Neon Mini-Glows ---
@@ -206,15 +399,15 @@ class Board:
                     nx = int(nx * zoom + offset_x)
                     ny = int(ny * zoom + offset_y)
                     
-                    # Draw animated neon connection lines
+                                # Draw animated neon connection lines
                     dx = abs(city_x - nx)
                     # Use green if disease is cured, otherwise use disease color
                     if city.disease.has_cure:
                         neon_base = (0, 255, 0)  # Bright green for cured diseases
                         shadow = (0, 100, 0)     # Darker green shadow
                     else:
-                        neon_base = (80,200,255) if city.disease.color=="Blue" else (255,220,90) if city.disease.color=="Yellow" else (255,80,180) if city.disease.color=="Red" else (170,80,255)
-                        shadow = (60,60,60)
+                        neon_base = self._get_city_color(city)
+                        shadow = tuple(max(0, c - 40) for c in neon_base)  # Darker version for shadow
                     # Animate pulse along the edge
                     pulse_speed = 2.0
                     phase = t * pulse_speed + (city_x + city_y + nx + ny) * 0.005
@@ -238,19 +431,19 @@ class Board:
             city_x = int(city_x * zoom + offset_x)
             city_y = int(city_y * zoom + offset_y)
             
+            # If move mode and this city is a neighbor, highlight it with a green circle
+            if self.move_mode and city in self.highlighted_cities:
+                pygame.draw.circle(screen, (0,255,0), (city_x, city_y), 20, 4)  # Green highlight
+            
             # Draw pixelated shadow under city
             pygame.draw.circle(screen, (40,40,40), (city_x, city_y+6), 13)
             # Animate city pulse (smaller, faster)
             city_idx = self.game.cities.index(city)
             node_pulse = 0.85 + 0.15 * math.sin(t*5 + city_idx)
             
-            # Use green if disease is cured, otherwise use disease color
-            if city.disease.has_cure:
-                neon_base = (0, 255, 0)  # Bright green for cured diseases
-            else:
-                neon_base = (80,200,255) if city.disease.color=="Blue" else (255,220,90) if city.disease.color=="Yellow" else (255,80,180) if city.disease.color=="Red" else (170,80,255)
-            
-            neon = tuple(min(255, int(c * node_pulse)) for c in neon_base)
+            # Get base color and apply pulse effect
+            base_color = (0, 255, 0) if city.disease.has_cure else self._get_city_color(city)
+            neon = tuple(min(255, int(c * node_pulse)) for c in base_color)
             radius = int(8 * node_pulse + 5)
             pygame.draw.circle(screen, neon, (city_x, city_y), radius)
             pygame.draw.circle(screen, (0,0,0), (city_x, city_y), int(radius*0.75))
@@ -279,6 +472,22 @@ class Board:
                 initial_font = pygame.font.SysFont('Arial', 14, bold=True)
                 initial_text = initial_font.render(initials, True, (0,0,0))
                 screen.blit(initial_text, (int(px)-initial_text.get_width()//2, int(py)-initial_text.get_height()//2))
+            # Draw disease cube indicators (small circles below the city)
+            if city.disease_quantity > 0:
+                cube_color = self.disease_colors.get(city.disease.color, (100, 100, 100))
+                
+                # Position the cube indicators in a small arc below the city
+                for i in range(city.disease_quantity):
+                    # Calculate position in a small arc (3 cubes max per row)
+                    row = i // 3
+                    col = i % 3 - 1  # -1, 0, 1 for positioning
+                    cube_x = city_x + col * 6
+                    cube_y = city_y + 15 + row * 6
+                    
+                    # Draw a small circle for each disease cube
+                    pygame.draw.circle(screen, cube_color, (cube_x, cube_y), 3)
+                    pygame.draw.circle(screen, (255, 255, 255), (cube_x, cube_y), 3, 1)  # White outline
+            
             # Draw research center if built
             if city.has_center:
                 center_size = 15
@@ -358,6 +567,10 @@ class Board:
                             if not player.city.has_center:  # Only build if there isn't already a center
                                 self.game.perform_action(action)
                                 player.city.setCenter()  # Ensure the center is marked as built
+                            return
+                        elif action in ['treat_disease', 'find_cure']:
+                            # Pass the board reference for these actions to show messages
+                            self.game.perform_action(action, board=self)
                             return
                         else:
                             self.game.perform_action(action)

@@ -1,7 +1,9 @@
 from city import City
 from disease import Disease
 from player import Player
+from cards import CityPlayerCard, EpidemicPlayerCard, InfectionCard
 import random
+from typing import List, Union
 
 class Game:
     def __init__(self):
@@ -11,34 +13,183 @@ class Game:
         self.infectionLevel = 2
         self.outbreaks = 0
         self.current_player_index = 0
-        self.turn_actions_remaining = 1  # Changed from 4 to 1 for one action per turn 
-
+        self.turn_actions_remaining = 1  
+        self.player_deck: List[Union[CityPlayerCard, EpidemicPlayerCard]] = []
+        self.infection_deck: List[InfectionCard] = []
+        self.infection_discard: List[InfectionCard] = []  
+        self.board = None
+        
     def get_current_player(self):
         return self.players[self.current_player_index]
 
-    def next_turn(self):
-        self.current_player_index = (self.current_player_index + 1) % len(self.players)
-        self.turn_actions_remaining = 1  # Changed from 4 to 1 for one action per turn
+    def check_ending_conditions(self):
+        """Check for win/lose conditions.
+        
+        Returns:
+            tuple: (game_over, message) where game_over is a boolean and message is a string
+                  describing the result (win/lose message or None if game continues)
+        """
+        # Check win condition: all diseases have cures
+        all_cured = all(disease.has_cure for disease in self.diseases)
+        if all_cured:
+            return True, "Congratulations! You've cured all diseases and won the game!"
+            
+        # Check lose conditions
+        # 1. No more infection cards to draw
+        if not self.infection_deck:
+            return True, "Game Over! No more infection cards to draw."
+            
+        # 2. Any disease has 24 or more cubes on the board
+        for disease in self.diseases:
+            cube_count = sum(city.disease_quantity for city in self.cities 
+                          if hasattr(city, 'disease') and city.disease == disease)
+            if cube_count >= 24:
+                return True, f"Game Over! Too many {disease.color} disease cubes on the board."
+                
+        # 3. 8 or more outbreaks
+        if self.outbreaks >= 8:
+            return True, "Game Over! Too many outbreaks have occurred (8 or more)."
+            
+        # If none of the above, game continues
+        return False, None
+    
+    def handle_epidemic(self):
+        """
+        Handle an epidemic event with the following effects:
+        1. Increase the infection level by 1
+        2. Draw and intensify the bottom card of the infection deck
+        3. Shuffle the infection discard pile and place it on top of the infection deck
+        """
+        # 1. Increase infection level
+        self.infectionLevel = min(self.infectionLevel + 1, 6)
+        self.board.show_message(f"Epidemic! Infection level increased to {self.infectionLevel}")
+        
+        # 2. Intensify - draw and resolve bottom card of infection deck
+        if self.infection_deck:
+            card = self.infection_deck.pop(0)
+            for _ in range(3):
+                card.city.infect(self)
+            self.infection_discard.append(card)
+        
+        # 3. Reshuffle discard pile and place on top of infection deck
+        if self.infection_discard:
+            random.shuffle(self.infection_discard)
+            self.infection_deck = self.infection_discard + self.infection_deck
+            self.infection_discard = []
+            
+        self.board.show_message("Infection cards have been reshuffled!")
 
-    def perform_action(self, action, *args, **kwargs):
+    def next_turn(self):
+        # Draw cards for the current player
+        self.draw_end_of_turn_cards()
+        
+        # Check game state after card drawing
+        game_over, message = self.check_ending_conditions()
+        if game_over:
+            self.board.show_blocking_message(message)
+            return False
+        
+        # Move to next player
+        self.current_player_index = (self.current_player_index + 1) % len(self.players)
+        self.turn_actions_remaining = 1  
+        
+        return True
+        
+    def draw_end_of_turn_cards(self):
+        """
+        Draw cards at the end of the turn.
+        Draws 2 player cards and draws infection cards equal to the current infection level.
+        """
+        current_player = self.get_current_player()
+        
+        # Draw 2 player cards
+        for _ in range(2):
+            if not self.player_deck:
+                self.board.show_message("No more player cards to draw!")
+                break
+                
+            card = self.draw_player_card()
+            
+            # Handle Epidemic card
+            if isinstance(card, EpidemicPlayerCard):
+                self.handle_epidemic()
+                self.board.show_message(f"{current_player.name} triggered an EPIDEMIC!")
+                
+            # Add city cards to the player's hand
+            if isinstance(card, CityPlayerCard):
+                current_player.hand.append(card)
+            
+            # Check if player has too many cards
+            if len(current_player.hand) > 7:
+                self.board.show_message(f"{current_player.name} has too many cards! Must discard down to 7.")
+                # For now, just keep the first 7 cards
+                current_player.hand = current_player.hand[:7]
+        
+        # Draw infection cards based on current infection level
+        for _ in range(self.infectionLevel):
+            if not self.infection_deck:
+                break
+                
+            infection_card = self.draw_infection_card()
+            if infection_card is not None:
+                infection_card.city.infect(self)
+
+        return True  # Turn completed successfully
+    
+
+    def perform_action(self, action, *args, board=None, **kwargs):
         if self.turn_actions_remaining > 0:
             player = self.get_current_player()
-            player.play(action, *args, **kwargs)
-            self.turn_actions_remaining -= 1
-            if self.turn_actions_remaining == 0:
-                self.next_turn()
-
+            
+            # For actions that need the board reference and special handling
+            if action in ['treat_disease', 'find_cure']:
+                if board is None:
+                    print(f"Error: Board reference is required for {action} action")
+                    return False
+                    
+                # Call the appropriate method with board reference
+                if action == 'treat_disease':
+                    success = player.treat_disease(board)
+                else:  # find_cure
+                    success = player.find_cure(board)
+                
+                # Only consume action if successful
+                if success:
+                    self.turn_actions_remaining -= 1
+                    if self.turn_actions_remaining == 0:
+                        self.next_turn()
+                return success
+            else:
+                # For other actions, proceed as normal
+                player.play(action, *args, **kwargs)
+                self.turn_actions_remaining -= 1
+                if self.turn_actions_remaining == 0:
+                    self.next_turn()
+                return True
+   
     def set_game_initial_state(self):
+        blueDisease, yellowDisease, pinkDisease, purpleDisease = self.set_diseases()
+        initialCity = self.set_cities_graph(blueDisease, yellowDisease, pinkDisease, purpleDisease)
+        self.set_players(initialCity)
+        initialCity.has_center = True
+        self.set_player_deck()
+        self.set_infection_deck()
+        self.set_initial_infection()
+    
+    def set_diseases(self):
         blueDisease = Disease("Blue")
         yellowDisease = Disease("Yellow")
-        redDisease = Disease("Red")
-        blackDisease = Disease("Black")
+        pinkDisease = Disease("Pink")
+        purpleDisease = Disease("Purple")
         
         self.diseases.append(blueDisease)
         self.diseases.append(yellowDisease)
-        self.diseases.append(redDisease)
-        self.diseases.append(blackDisease)
-
+        self.diseases.append(pinkDisease)
+        self.diseases.append(purpleDisease)
+        return blueDisease, yellowDisease, pinkDisease, purpleDisease
+    
+    def set_cities_graph(self, blueDisease, yellowDisease, pinkDisease, purpleDisease):   
+        
         sanFrancisco = City("San Francisco", (858, 1170), blueDisease)
         chicago = City("Chicago", (1287, 1170), blueDisease)
         atlanta = City("Atlanta", (1372, 1287), blueDisease)
@@ -51,8 +202,6 @@ class Game:
         essen = City("Essen", (2027, 943), blueDisease)
         milan = City("Milan", (2071, 1170), blueDisease)
         stPetersburg = City("St. Petersburg", (2240, 842), blueDisease)
-
-
 
         # Yellow disease cities (Africa and America)
         losAngeles = City("Los Angeles", (791, 1287), yellowDisease)
@@ -68,33 +217,33 @@ class Game:
         kinshasa = City("Kinshasa", (2274, 1798), yellowDisease)
         johannesburg = City("Johannesburg", (2313, 2240), yellowDisease)
 
-        # Red disease cities (Asia and Australia)
-        beijing = City("Beijing", (3418, 1177), redDisease)
-        seoul = City("Seoul", (3631, 1131), redDisease)
-        shangai = City("Shanghai", (3499, 1306), redDisease)
-        tokyo = City("Tokyo", (3750, 1210), redDisease)
-        osaka = City("Osaka", (3705, 1250), redDisease)
-        taipei = City("Taipei", (3631, 1460), redDisease)
-        hongKong = City("Hong Kong", (3537, 1548), redDisease)
-        bangkok = City("Bangkok", (3321, 1629), redDisease)
-        manila = City("Manila", (3705, 1604), redDisease)
-        hoChiMinhCity = City("Ho Chi Minh City", (3449, 1701), redDisease)
-        jakarta = City("Jakarta", (3499, 1879), redDisease)
-        sydney = City("Sydney", (3930, 2178), redDisease)
+        # Pink disease cities (Asia and Australia)
+        beijing = City("Beijing", (3418, 1177), pinkDisease)
+        seoul = City("Seoul", (3631, 1131), pinkDisease)
+        shangai = City("Shanghai", (3499, 1306), pinkDisease)
+        tokyo = City("Tokyo", (3750, 1210), pinkDisease)
+        osaka = City("Osaka", (3705, 1250), pinkDisease)
+        taipei = City("Taipei", (3631, 1460), pinkDisease)
+        hongKong = City("Hong Kong", (3537, 1548), pinkDisease)
+        bangkok = City("Bangkok", (3321, 1629), pinkDisease)
+        manila = City("Manila", (3705, 1604), pinkDisease)
+        hoChiMinhCity = City("Ho Chi Minh City", (3449, 1701), pinkDisease)
+        jakarta = City("Jakarta", (3499, 1879), pinkDisease)
+        sydney = City("Sydney", (3930, 2178), pinkDisease)
 
-        # Black disease cities (South and Center Asia, Middle East)
-        algiers = City("Algiers", (2027, 1287), blackDisease)
-        instanbul = City("Istanbul", (2274, 1169), blackDisease)
-        moscow = City("Moscow", (2574, 859), blackDisease)
-        cairo = City("Cairo", (2313, 1372), blackDisease)
-        baghdad = City("Baghdad", (2482, 1247), blackDisease)
-        tehran = City("Tehran", (2659, 1209), blackDisease)
-        delhi = City("Delhi", (2797, 1372), blackDisease)
-        karachi = City("Karachi", (2715, 1458), blackDisease)
-        mumbai = City("Mumbai", (2755, 1495), blackDisease)
-        riyadh = City("Riyadh", (2482, 1458), blackDisease)
-        chennai = City("Chennai", (2853, 1629), blackDisease)
-        kolkata = City("Kolkata", (2904, 1460), blackDisease)
+        # Purple disease cities (South and Center Asia, Middle East)
+        algiers = City("Algiers", (2027, 1287), purpleDisease)
+        instanbul = City("Istanbul", (2274, 1169), purpleDisease)
+        moscow = City("Moscow", (2574, 859), purpleDisease)
+        cairo = City("Cairo", (2313, 1372), purpleDisease)
+        baghdad = City("Baghdad", (2482, 1247), purpleDisease)
+        tehran = City("Tehran", (2659, 1209), purpleDisease)
+        delhi = City("Delhi", (2797, 1372), purpleDisease)
+        karachi = City("Karachi", (2715, 1458), purpleDisease)
+        mumbai = City("Mumbai", (2755, 1495), purpleDisease)
+        riyadh = City("Riyadh", (2482, 1458), purpleDisease)
+        chennai = City("Chennai", (2853, 1629), purpleDisease)
+        kolkata = City("Kolkata", (2904, 1460), purpleDisease)
 
         sanFrancisco.setNeighbors([tokyo, manila, losAngeles, chicago])
         chicago.setNeighbors([sanFrancisco, losAngeles, mexicoCity, atlanta, montreal])
@@ -197,23 +346,77 @@ class Game:
         self.cities.append(chennai)
         self.cities.append(kolkata)
 
-        
-        # Choose 4 random cities
-        startingCities = random.sample(self.cities, 4)
-
-        # Initialize players
-        self.players = [
-            Player("Fernando", startingCities[0]),
-            Player("Rafael", startingCities[1]),
-            Player("Oliver", startingCities[2]),
-            Player("Patricia", startingCities[3])
-        ]
+        return atlanta
     
-    def check_ending_conditions(self):
-        return self.outbreaks < 8
+    def set_players(self, initialCity):
+        self.players = [
+            Player("Fernando", initialCity),
+            Player("Rafael", initialCity),
+            Player("Oliver", initialCity),
+            Player("Patricia", initialCity)
+        ]
 
-    def start_game(self):
-        self.current_player_index = 0
-        self.turn_actions_remaining = 1  # Changed from 4 to 1 for one action per turn
+    def set_player_deck(self) -> None:
+        self.player_deck = []
+        
+        for city in self.cities:
+            self.player_deck.append(CityPlayerCard(city))
+
+        random.shuffle(self.player_deck)
+        
+        self.set_players_initial_hand()
+
+        for _ in range(6):
+            self.player_deck.append(EpidemicPlayerCard())
+        
+        random.shuffle(self.player_deck)
+
+    def set_infection_deck(self) -> None:
+        self.infection_deck = []
+        self.infection_discard = []  
+        
+        for city in self.cities:
+            self.infection_deck.append(InfectionCard(city))
+        
+        random.shuffle(self.infection_deck)
+    
+    def draw_player_card(self) -> Union[CityPlayerCard, EpidemicPlayerCard]:
+        if not self.player_deck:
+            self.board.show_message("No more player cards available")
+            return None
+        return self.player_deck.pop()
+    
+    def draw_infection_card(self) -> InfectionCard:
+        """Draw a card from the infection deck and move it to the discard pile."""
+        if not self.infection_deck:
+            return None
+        card = self.infection_deck.pop()
+        self.infection_discard.append(card)  # Add to discard when drawn
+        return card
+    
+    def set_players_initial_hand(self) -> None:
+        for player in self.players:
+            for _ in range(2):
+                card = self.draw_player_card()
+                player.hand.append(card)
+
+    def set_initial_infection(self):
+        for _ in range(3):
+            card = self.draw_infection_card()
+            for _ in range(3):
+                card.increase_city_disease_quantity()
+        for _ in range(3):
+            card = self.draw_infection_card()
+            for _ in range(2):
+                card.increase_city_disease_quantity()
+        for _ in range(3):
+            card = self.draw_infection_card()
+            card.increase_city_disease_quantity()
+
+    def get_current_player(self):
+        if not self.players:
+            return None
+        return self.players[self.current_player_index]
+        
 
     

@@ -22,8 +22,8 @@ def main():
     game = Game()
     game.set_game_initial_state()
     board = Board(game)
-    game.start_game() 
-
+    game.board = board
+    
     running = True
     while running:
         for event in pygame.event.get():
